@@ -50,6 +50,23 @@ def road_of(addr, names, district):
     return m.group(1) if m else ''
 
 
+def zone_of(x):
+    """使用分區：都市土地寫分區（住宅區、商業區…），非都市土地寫編定（乙種建築用地…）。"""
+    z = (x['都市土地使用分區'] or '').replace('都市：', '').replace('其他:', '')
+    if z:
+        return z
+    return '／'.join(v for v in (x['非都市土地使用分區'], x['非都市土地使用編定']) if v)
+
+
+def slim(r):
+    """明細欄位瘦身：12.0 寫成 12、「0」寫成空字串，尾端的空值省略。"""
+    r = [int(v) if isinstance(v, float) and v.is_integer() else v for v in r]
+    r = ['' if v == '0' else v for v in r]
+    while r and r[-1] in ('', 0):
+        r.pop()
+    return r
+
+
 def num(v):
     try:
         return float(v or 0)
@@ -99,15 +116,35 @@ def main():
                 age,                                                    # 8 屋齡
                 x['建物現況格局-房'] or '',                              # 9 房數
                 1 if x['車位類別'] else 0,                               # 10 含車位
+                # ↓ 點開明細才用到的欄位
+                x.get('建物現況格局-廳') or '',                           # 11 廳
+                x.get('建物現況格局-衛') or '',                           # 12 衛
+                x['車位類別'] or '',                                     # 13 車位類別
+                round(num(x['車位總價元']) / 10000, 1),                   # 14 車位總價（萬）
+                x['主要用途'] or '',                                     # 15 主要用途
+                x['主要建材'] or '',                                     # 16 主要建材
+                1 if x['有無管理組織'] == '有' else 0,                    # 17 管理組織
+                {'有': 1, '無': 0}.get(x.get('電梯', ''), ''),           # 18 電梯（舊資料沒有這欄）
+                round(num(x.get('主建物面積')) * M2_TO_PING, 1),          # 19 主建物（坪）
+                round(num(x.get('附屬建物面積')) * M2_TO_PING, 1),        # 20 附屬建物（坪）
+                round(num(x.get('陽台面積')) * M2_TO_PING, 1),            # 21 陽台（坪）
+                zone_of(x),                                             # 22 使用分區
+                x['交易筆棟數'] or '',                                   # 23 交易筆棟數
+                x['備註'].strip('；; ') if x['備註'] else '',            # 24 備註
+                built.strftime('%Y%m') if built else '',                # 25 完工年月
+                round(num(x['車位移轉總面積平方公尺']) * M2_TO_PING, 1),  # 26 車位坪數
             ])
 
         dists = []
         for i, (name, lst) in enumerate(sorted(by_dist.items(), key=lambda kv: -len(kv[1]))):
             fid = f'{code}-{i + 1:02d}'
             lst.sort(key=lambda r: r[0], reverse=True)
-            with open(os.path.join(OUT_DIR, fid + '.js'), 'w', encoding='utf-8') as f:
-                f.write('/* 自動產生，請勿手動修改 */\nwindow.RP_LOAD&&RP_LOAD(' + json.dumps(fid) + ',' +
-                        json.dumps(lst, ensure_ascii=False, separators=(',', ':')) + ');\n')
+            # 列表檔只放前 11 欄（網頁一進來就要讀，越小越好）；
+            # 其餘欄位放「-d」明細檔，點開某一筆才載入，兩檔順序相同
+            for fn, data in ((fid, [r[:11] for r in lst]), (fid + '-d', [slim(r[11:]) for r in lst])):
+                with open(os.path.join(OUT_DIR, fn + '.js'), 'w', encoding='utf-8') as f:
+                    f.write('/* 自動產生，請勿手動修改 */\nwindow.RP_LOAD&&RP_LOAD(' + json.dumps(fn) + ',' +
+                            json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ');\n')
             dists.append({'f': fid, 'name': name, 'n': len(lst)})
         index['counties'].append({'code': code, 'name': cname, 'districts': dists})
         print(f'{cname}：{len(dists)} 個行政區，{sum(d["n"] for d in dists)} 筆')
