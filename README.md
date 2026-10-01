@@ -23,3 +23,14 @@
 ## 注意
 GitHub 規定：專案 60 天完全沒有動靜，排程會被暫停。這個機器人每 10 天會自己存檔一次，正常情況下不會發生；
 如果收到 GitHub 的暫停通知，到「Actions」頁面按「Enable workflow」就好。
+
+## 周邊機能地點（官網物件頁「周邊機能地圖」）
+- 每月 5 日自動執行（`.github/workflows/poi.yml`，程式 `tools/build_poi.py`），也可在 Actions 手動按「周邊機能地點更新」
+- 地點與座標：OpenStreetMap，經 Overpass API 分 20 塊查詢（每塊間隔 25 秒、失敗有限次重試，並有備用伺服器）
+- 學校核對：教育部統計處各級學校名錄（國小、國中、高中職、大專）；名錄比對不到的不列出，清單在 `data/poi/unmatched_schools.txt`
+- 產出：`data/poi/meta.json`（取得時間、OSM 資料時間、各類筆數）＋ `data/poi/{列}_{行}.json`（0.05 度一格，網頁只下載物件附近幾格）
+
+### 授權
+- OpenStreetMap 資料採 ODbL 授權：網頁必須標示「© OpenStreetMap 貢獻者」；本專案整理後的 `data/poi` 同樣以 ODbL 公開
+- 教育部學校名錄採政府資料開放授權條款第 1 版：需標示來源
+- Overpass 公用伺服器沒有服務保證，偶爾忙碌會失敗；失敗時這次不更新，網站繼續用上一次的資料
