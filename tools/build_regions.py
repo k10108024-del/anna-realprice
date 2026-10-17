@@ -79,11 +79,21 @@ def land_no(code):
     return f'{m}-{sub}' if sub else f'{m}'
 
 
+def attach_zone(z):
+    """附表的使用分區：「非都市：鄉村區 ; 非都市編定：乙種建築用地」→「鄉村區／乙種建築用地」；「都市：其他:住宅區」→「住宅區」
+    （網頁看到有「／」就當非都市，分兩行寫回「非都市：…」「非都市編定：…」）"""
+    z = (z or '').strip()
+    if z.startswith('非都市'):
+        parts = [p.split('：', 1)[-1].strip() for p in z.split(';') if p.strip()]
+        return '／'.join(p for p in parts if p)
+    return z.replace('都市：', '', 1).replace('其他:', '').strip()
+
+
 def attach_rows(k, attach):
     """一筆成交的三份附表 → [土地明細, 建物明細, 車位明細]（都沒有就是空陣列）"""
     lands = [[(a['土地位置'] or '') + (land_no(a.get('地號')) + '地號' if a.get('地號') else ''),
               round(num(a['土地移轉面積平方公尺']) * M2_TO_PING, 2),
-              (a['使用分區或編定'] or '').replace('都市：', '').replace('非都市：', '').replace(' ; 非都市編定：', '／').replace('其他:', ''),
+              attach_zone(a['使用分區或編定']),
               f"{a['權利人持分分子']}/{a['權利人持分分母']}" if a.get('權利人持分分母') and a['權利人持分分母'] != '1' else '全部',
               a.get('移轉情形') or '']
              for a in attach.get('land', {}).get(k, [])]

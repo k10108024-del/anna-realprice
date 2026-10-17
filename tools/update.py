@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import lvr, build_regions, build_home
 
 lvr.save_current_batch(['B', 'N', 'M'])
+lvr.fill_prev_attach(['B', 'N', 'M'])   # 上一批如果漏存附表，從「前期下載」補回來
 lvr.prune_current()
 build_regions.main()
 build_home.main()

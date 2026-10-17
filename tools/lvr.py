@@ -74,6 +74,34 @@ def save_current_batch(counties):
     return tag
 
 
+def fill_prev_attach(counties):
+    """內政部「前期下載」還留著上一批：那一批如果之前只存了主檔（沒有附表），就把附表補存回來"""
+    try:
+        html = _get('https://plvr.land.moi.gov.tw/DownloadHistory_ajax_list').decode('utf-8', 'ignore')
+    except Exception as e:
+        print('前期清單讀不到：', e)
+        return
+    for name in sorted(set(re.findall(r"downloadLast\('(\d+)'\)", html))):
+        try:
+            z = zipfile.ZipFile(io.BytesIO(_get(f'https://plvr.land.moi.gov.tw/DownloadHistory?type=history&fileName={name}', timeout=300)))
+            d = re.findall(r'(\d+)年(\d+)月(\d+)日', z.read('build_time.xml').decode('utf-8', 'ignore'))
+        except Exception as e:
+            print(f'前期 {name} 下載失敗：', e)
+            continue
+        tag = '-'.join(f'{int(y):03d}{int(m):02d}{int(dd):02d}' for y, m, dd in d[:2])
+        folder = os.path.join(RAW_CURRENT, tag)
+        if not os.path.isdir(folder):
+            continue
+        for c in counties:
+            for kind in ATTACH:
+                dst = os.path.join(folder, f'{c}_{kind}.csv')
+                src = f'{c.lower()}_lvr_land_a_{kind}.csv'
+                if not os.path.exists(dst) and src in z.namelist():
+                    with open(dst, 'wb') as f:
+                        f.write(z.read(src))
+                    print(f'補存前期 {tag} {c} {kind}')
+
+
 def load_current(county, kind=''):
     rows = []
     if not os.path.isdir(RAW_CURRENT):
