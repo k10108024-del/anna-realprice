@@ -6,18 +6,22 @@
 每個行政區存成一個小檔，網頁選到哪一區才下載那一區，網站才不會變慢。
 
 產出：
-  data/index.js     縣市與行政區目錄
-  data/B-01.js ...  各行政區的成交明細
+  data/index.js       縣市與行政區目錄
+  data/B-01.js ...    各行政區的成交清單（前 12 欄）
+  data/B-01-d.js ...  明細欄位（點開某一筆、或用電梯／管理組織篩選時才載入）＋歷次標記
+  data/B-01-x-0.js …  土地／建物／車位附表，每 400 筆一個檔（附表很大，點開某一筆只讀那一片）
+  data/h/*.js         歷次（build_history.py）
 由 tools/update.py 呼叫
 """
 import csv, io, json, os, re, datetime, urllib.request
 from build_home import BAD, cn_num, roc_to_date, FW
-import lvr
+import lvr, build_history
 
 COUNTIES = [('B', '台中市', ['臺中市', '台中市']),
             ('N', '彰化縣', ['彰化縣']),
             ('M', '南投縣', ['南投縣'])]
 QUARTERS = 8          # 抓幾季（兩年，給走勢圖用）
+X_CHUNK = 400         # 附表每幾筆切一個檔
 OUT_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 M2_TO_PING = 0.3025
 
@@ -37,7 +41,7 @@ def type_of(x):
 
 
 def road_of(addr, names, district):
-    """門牌只留到路／街／巷弄（完整門牌可以問安娜）。"""
+    """路段：門牌只留到路／街／巷弄（行情分析的路段比較、AI 小幫手用；完整門牌另外放第 11 欄）"""
     a = addr.translate(FW)
     for n in names + [district]:
         a = a.replace(n, '')
@@ -67,6 +71,30 @@ def slim(r):
     return r
 
 
+def land_no(code):
+    """地號 00410000 → 41；00410001 → 41-1"""
+    if not code or not code.isdigit() or len(code) != 8:
+        return code or ''
+    m, sub = int(code[:4]), int(code[4:])
+    return f'{m}-{sub}' if sub else f'{m}'
+
+
+def attach_rows(k, attach):
+    """一筆成交的三份附表 → [土地明細, 建物明細, 車位明細]（都沒有就是空陣列）"""
+    lands = [[(a['土地位置'] or '') + (land_no(a.get('地號')) + '地號' if a.get('地號') else ''),
+              round(num(a['土地移轉面積平方公尺']) * M2_TO_PING, 2),
+              (a['使用分區或編定'] or '').replace('都市：', '').replace('非都市：', '').replace(' ; 非都市編定：', '／').replace('其他:', ''),
+              f"{a['權利人持分分子']}/{a['權利人持分分母']}" if a.get('權利人持分分母') and a['權利人持分分母'] != '1' else '全部',
+              a.get('移轉情形') or '']
+             for a in attach.get('land', {}).get(k, [])]
+    blds = [[a['建物分層'] or '', round(num(a['建物移轉面積平方公尺']) * M2_TO_PING, 2), a['主要用途'] or '', a['主要建材'] or '',
+             a['建築完成日期'] or '', a['總層數'] or '', a['屋齡'] or '', a.get('移轉情形') or '']
+            for a in attach.get('build', {}).get(k, [])]
+    parks = [[a['車位類別'] or '', round(num(a['車位價格']) / 10000, 1), round(num(a['車位面積平方公尺']) * M2_TO_PING, 2), a['車位所在樓層'] or '']
+             for a in attach.get('park', {}).get(k, [])]
+    return [lands, blds, parks]
+
+
 def num(v):
     try:
         return float(v or 0)
@@ -79,7 +107,9 @@ def main():
     index = {'updated': datetime.date.today().isoformat(), 'types': TYPES, 'counties': []}
     latest = None
     for code, cname, names in COUNTIES:
-        rows = lvr.load_county(code, QUARTERS)
+        attach = {}
+        rows = lvr.load_county(code, QUARTERS, attach)
+        hist = build_history.merge(code, names, rows)   # 歷次累積檔（2012 年起）合併這次讀到的成交
 
         seen, by_dist = set(), {}
         for x in rows:
@@ -116,32 +146,48 @@ def main():
                 age,                                                    # 8 屋齡
                 x['建物現況格局-房'] or '',                              # 9 房數
                 1 if x['車位類別'] else 0,                               # 10 含車位
-                # ↓ 點開明細才用到的欄位
-                x.get('建物現況格局-廳') or '',                           # 11 廳
-                x.get('建物現況格局-衛') or '',                           # 12 衛
-                x['車位類別'] or '',                                     # 13 車位類別
-                round(num(x['車位總價元']) / 10000, 1),                   # 14 車位總價（萬）
-                x['主要用途'] or '',                                     # 15 主要用途
-                x['主要建材'] or '',                                     # 16 主要建材
-                1 if x['有無管理組織'] == '有' else 0,                    # 17 管理組織
-                {'有': 1, '無': 0}.get(x.get('電梯', ''), ''),           # 18 電梯（舊資料沒有這欄）
-                round(num(x.get('主建物面積')) * M2_TO_PING, 1),          # 19 主建物（坪）
-                round(num(x.get('附屬建物面積')) * M2_TO_PING, 1),        # 20 附屬建物（坪）
-                round(num(x.get('陽台面積')) * M2_TO_PING, 1),            # 21 陽台（坪）
-                zone_of(x),                                             # 22 使用分區
-                x['交易筆棟數'] or '',                                   # 23 交易筆棟數
-                x['備註'].strip('；; ') if x['備註'] else '',            # 24 備註
-                built.strftime('%Y%m') if built else '',                # 25 完工年月
-                round(num(x['車位移轉總面積平方公尺']) * M2_TO_PING, 1),  # 26 車位坪數
+                build_history.clean_addr(x['土地位置建物門牌'], names, x['鄉鎮市區']),   # 11 完整門牌
+                # ↓ 點開明細才用到的欄位（明細檔的第 0 欄起）
+                x.get('建物現況格局-廳') or '',                           # 12 廳
+                x.get('建物現況格局-衛') or '',                           # 13 衛
+                x['車位類別'] or '',                                     # 14 車位類別
+                round(num(x['車位總價元']) / 10000, 1),                   # 15 車位總價（萬）
+                x['主要用途'] or '',                                     # 16 主要用途
+                x['主要建材'] or '',                                     # 17 主要建材
+                1 if x['有無管理組織'] == '有' else 0,                    # 18 管理組織
+                {'有': 1, '無': 0}.get(x.get('電梯', ''), ''),           # 19 電梯（舊資料沒有這欄）
+                round(num(x.get('主建物面積')) * M2_TO_PING, 1),          # 20 主建物（坪）
+                round(num(x.get('附屬建物面積')) * M2_TO_PING, 1),        # 21 附屬建物（坪）
+                round(num(x.get('陽台面積')) * M2_TO_PING, 1),            # 22 陽台（坪）
+                zone_of(x),                                             # 23 使用分區
+                x['交易筆棟數'] or '',                                   # 24 交易筆棟數
+                x['備註'].strip('；; ') if x['備註'] else '',            # 25 備註
+                built.strftime('%Y%m') if built else '',                # 26 完工年月
+                round(num(x['車位移轉總面積平方公尺']) * M2_TO_PING, 1),  # 27 車位坪數
+            ] + attach_rows(x['編號'], attach) + [                     # 28 土地明細 29 建物明細 30 車位明細
+                build_history.addr_key(x, names),                       # 31 歷次鍵（下面換成分片名＋鍵，沒有歷次就空白）
             ])
 
-        dists = []
-        for i, (name, lst) in enumerate(sorted(by_dist.items(), key=lambda kv: -len(kv[1]))):
-            fid = f'{code}-{i + 1:02d}'
+        dists, fid_of = [], {}
+        order = sorted(by_dist.items(), key=lambda kv: -len(kv[1]))
+        for i, (name, lst) in enumerate(order):
+            fid_of[name] = f'{code}-{i + 1:02d}'
+        marks = build_history.export(code, hist, fid_of)
+        for i, (name, lst) in enumerate(order):
+            fid = fid_of[name]
             lst.sort(key=lambda r: r[0], reverse=True)
-            # 列表檔只放前 11 欄（網頁一進來就要讀，越小越好）；
-            # 其餘欄位放「-d」明細檔，點開某一筆才載入，兩檔順序相同
-            for fn, data in ((fid, [r[:11] for r in lst]), (fid + '-d', [slim(r[11:]) for r in lst])):
+            for r in lst:   # 歷次鍵：有歷次的換成「分片|鍵」，網頁直接知道要讀哪個檔
+                sh = marks.get((name, r[31]))
+                r[31] = f'{sh}|{r[31]}' if sh else ''
+            # 列表檔只放前 12 欄（網頁一進來就要讀，越小越好）；明細欄位放「-d」（第 16 欄是歷次鍵）；
+            # 附表放「-x-片」，每 400 筆一片；三種檔順序相同
+            files = [(fid, [r[:12] for r in lst]), (fid + '-d', [slim(r[12:28] + [r[31]]) for r in lst])]
+            for n in range(0, len(lst), X_CHUNK):
+                files.append((f'{fid}-x-{n // X_CHUNK}', [r[28:31] for r in lst[n:n + X_CHUNK]]))
+            for f in os.listdir(OUT_DIR):   # 先清掉這一區舊的附表片（筆數變少時片數也會變少）
+                if f.startswith(fid + '-x-'):
+                    os.remove(os.path.join(OUT_DIR, f))
+            for fn, data in files:
                 with open(os.path.join(OUT_DIR, fn + '.js'), 'w', encoding='utf-8') as f:
                     f.write('/* 自動產生，請勿手動修改 */\nwindow.RP_LOAD&&RP_LOAD(' + json.dumps(fn) + ',' +
                             json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ');\n')

@@ -7,6 +7,7 @@
   2. 本期資料（每月 1、11、21 日發布的最新一批）：
      每次執行都把最新一批存進 raw/current/，累積起來，
      這樣還沒公布整季資料的最近幾個月也看得到
+另外還有三份附表（土地、建物、車位明細），用「編號」對回主檔
 """
 import csv, io, os, re, zipfile, datetime, urllib.request
 
@@ -19,8 +20,9 @@ def _get(url, timeout=120):
     return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
 
 
-def _parse(raw_text):
-    if not raw_text.startswith('鄉鎮市區'):
+def _parse(raw_text, first='鄉鎮市區'):
+    """主檔第一欄是「鄉鎮市區」，附表是「編號」；不是預期的開頭（例如還沒公布的季別）回傳 None"""
+    if not raw_text.startswith(first):
         return None
     r = list(csv.reader(io.StringIO(raw_text)))
     return [dict(zip(r[0], x)) for x in r[2:]]   # 第二列是英文欄名，跳過
@@ -39,9 +41,14 @@ def seasons_back(n):
     return out
 
 
-def fetch_season(county, season):
-    raw = _get(f'https://plvr.land.moi.gov.tw/DownloadSeason?season={season}&fileName={county}_lvr_land_a.csv')
-    return _parse(raw.decode('utf-8-sig', 'ignore'))
+ATTACH = ('land', 'build', 'park')   # 附表：土地明細、建物明細、車位明細
+
+
+def fetch_season(county, season, kind=''):
+    """kind 空白＝主檔；'land'／'build'／'park'＝附表"""
+    suffix = f'_{kind}' if kind else ''
+    raw = _get(f'https://plvr.land.moi.gov.tw/DownloadSeason?season={season}&fileName={county}_lvr_land_a{suffix}.csv')
+    return _parse(raw.decode('utf-8-sig', 'ignore'), '編號' if kind else '鄉鎮市區')
 
 
 def save_current_batch(counties):
@@ -52,32 +59,36 @@ def save_current_batch(counties):
     d = re.findall(r'(\d+)年(\d+)月(\d+)日', info)
     tag = '-'.join(f'{int(y):03d}{int(m):02d}{int(dd):02d}' for y, m, dd in d[:2]) or datetime.date.today().isoformat()
     folder = os.path.join(RAW_CURRENT, tag)
-    if os.path.isdir(folder):
+    if os.path.isdir(folder) and all(os.path.exists(os.path.join(folder, f'{c}_{k}.csv')) for c in counties for k in ATTACH):
         print(f'本期 {tag} 已經存過')
         return tag
-    os.makedirs(folder)
+    os.makedirs(folder, exist_ok=True)   # 已經存過主檔、但還沒有附表（2026-10 以前存的）就補存附表
     for c in counties:
-        name = f'{c.lower()}_lvr_land_a.csv'
-        if name in z.namelist():
-            with open(os.path.join(folder, f'{c}.csv'), 'wb') as f:
-                f.write(z.read(name))
+        for kind in ('',) + ATTACH:
+            suffix = f'_{kind}' if kind else ''
+            name = f'{c.lower()}_lvr_land_a{suffix}.csv'
+            if name in z.namelist():
+                with open(os.path.join(folder, f'{c}{suffix}.csv'), 'wb') as f:
+                    f.write(z.read(name))
     print(f'本期 {tag} 已存檔')
     return tag
 
 
-def load_current(county):
+def load_current(county, kind=''):
     rows = []
     if not os.path.isdir(RAW_CURRENT):
         return rows
+    suffix = f'_{kind}' if kind else ''
     for tag in sorted(os.listdir(RAW_CURRENT)):
-        p = os.path.join(RAW_CURRENT, tag, f'{county}.csv')
+        p = os.path.join(RAW_CURRENT, tag, f'{county}{suffix}.csv')
         if os.path.exists(p):
-            rows += _parse(open(p, encoding='utf-8-sig', errors='ignore').read()) or []
+            rows += _parse(open(p, encoding='utf-8-sig', errors='ignore').read(), '編號' if kind else '鄉鎮市區') or []
     return rows
 
 
-def load_county(county, quarters):
-    """整季資料（最近 quarters 季）＋累積的本期資料，依編號去重。"""
+def load_county(county, quarters, attach=None):
+    """整季資料（最近 quarters 季）＋累積的本期資料，依編號去重。
+    attach 給一個 dict 時，順便下載同樣季別的附表，放進 attach[kind][編號] = [列, 列…]"""
     rows, got = [], 0
     for s in seasons_back(quarters + 1):
         d = fetch_season(county, s)
@@ -87,8 +98,14 @@ def load_county(county, quarters):
         rows += d
         got += 1
         print(f'{county} {s} 下載 {len(d)} 筆')
+        if attach is not None:
+            for kind in ATTACH:
+                _add_attach(attach, kind, fetch_season(county, s, kind) or [])
         if got >= quarters:
             break
+    if attach is not None:
+        for kind in ATTACH:
+            _add_attach(attach, kind, load_current(county, kind))
     cur = load_current(county)
     print(f'{county} 本期累積 {len(cur)} 筆')
     seen, out = set(), []
@@ -99,6 +116,17 @@ def load_county(county, quarters):
         seen.add(k)
         out.append(x)
     return out
+
+
+def _add_attach(attach, kind, rows):
+    """附表同一個編號可能出現在整季和本期兩邊：以先讀到的那份為準，不重複加"""
+    got = attach.setdefault(kind, {})
+    fresh = {}
+    for x in rows:
+        k = x.get('編號')
+        if k and k not in got:
+            fresh.setdefault(k, []).append(x)
+    got.update(fresh)
 
 
 def prune_current(keep_days=800):
