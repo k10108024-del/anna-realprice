@@ -11,9 +11,10 @@
   data/B-01-d.js ...  明細欄位（點開某一筆、或用電梯／管理組織篩選時才載入）＋歷次標記
   data/B-01-x-0.js …  土地／建物／車位附表，每 400 筆一個檔（附表很大，點開某一筆只讀那一片）
   data/h/*.js         歷次（build_history.py）
+  data/summary.json   各行政區近 12 個月行情摘要（官網 worker 寫進實價登錄頁，給搜尋引擎、AI 讀）
 由 tools/update.py 呼叫
 """
-import csv, io, json, os, re, datetime, urllib.request
+import csv, io, json, os, re, datetime, statistics, urllib.request
 from build_home import BAD, cn_num, roc_to_date, FW
 import lvr, build_history
 
@@ -112,10 +113,32 @@ def num(v):
         return 0.0
 
 
+SUM_TYPES = [0, 1, 2, 3, 9]   # 行情摘要列哪些型態：透天、華廈、大樓、公寓、土地
+SUM_MIN_N = 5                  # 筆數少於這個不列中位數（跟網頁總覽一樣）
+
+
+def digest(dists_rows, latest):
+    """行情摘要（官網實價登錄頁寫進網頁給搜尋引擎、AI 讀）：各行政區近 12 個月、各型態的筆數與單價中位數。
+    含車位又沒有單獨標價的成交單價會偏低，不算進中位數（同網頁「只看單價可比」）。"""
+    m = latest.year * 12 + latest.month - 1 - 11   # 最新成交月份往回 11 個月，共 12 個月
+    start = f'{m // 12}{m % 12 + 1:02d}01'
+    out = []
+    for name, lst in dists_rows:
+        year = [r for r in lst if r[0] >= start]
+        types = []
+        for t in SUM_TYPES:
+            v = sorted(r[4] for r in year if r[1] == t and r[4] > 0 and not (r[10] and not r[15] > 0))
+            if len(v) >= SUM_MIN_N:
+                types.append({'t': TYPES[t], 'n': len(v), 'med': round(statistics.median(v), 1)})
+        out.append({'name': name, 'n': len(year), 'types': types})
+    return out
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     index = {'updated': datetime.date.today().isoformat(), 'types': TYPES, 'counties': []}
     latest = None
+    all_dists = []   # (縣市, [(行政區, 成交列)…])，給行情摘要用
     for code, cname, names in COUNTIES:
         attach = {}
         rows = lvr.load_county(code, QUARTERS, attach)
@@ -203,11 +226,18 @@ def main():
                             json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ');\n')
             dists.append({'f': fid, 'name': name, 'n': len(lst)})
         index['counties'].append({'code': code, 'name': cname, 'districts': dists})
+        all_dists.append((cname, [(name, [r[:16] for r in lst]) for name, lst in order]))
         print(f'{cname}：{len(dists)} 個行政區，{sum(d["n"] for d in dists)} 筆')
 
     index['latest'] = latest.strftime('%Y-%m') if latest else ''
     with open(os.path.join(OUT_DIR, 'index.js'), 'w', encoding='utf-8') as f:
         f.write('/* 自動產生，請勿手動修改 */\nwindow.RP_INDEX=' + json.dumps(index, ensure_ascii=False, separators=(',', ':')) + ';\n')
+    if latest:
+        m = latest.year * 12 + latest.month - 1 - 11
+        summary = {'updated': index['updated'], 'period': [f'{m // 12}-{m % 12 + 1:02d}', index['latest']],
+                   'counties': [{'name': c, 'districts': digest(ds, latest)} for c, ds in all_dists]}
+        with open(os.path.join(OUT_DIR, 'summary.json'), 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, separators=(',', ':'))
     print('完成 →', os.path.abspath(OUT_DIR))
 
 
