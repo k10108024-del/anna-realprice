@@ -32,11 +32,6 @@
 GitHub 規定：專案 60 天完全沒有動靜，排程會被暫停。這個機器人每 10 天會自己存檔一次，正常情況下不會發生；
 如果收到 GitHub 的暫停通知，到「Actions」頁面按「Enable workflow」就好。
 
-## Bing 數據同步（官網數據的 Bing 搜尋）
-- 每天台灣時間 07:00 自動執行（`.github/workflows/bing.yml`，程式 `tools/bing_sync.py`），也可在 Actions 手動按「Bing 數據同步」
-- Bing 會擋 Cloudflare 的網路，皮皮後台沒辦法自己抓，所以由這裡抓好原始資料、送到 crm-api 的 `/bing/ingest`；資料不存進這個公開專案
-- 需要 GitHub secret：`BING_API_KEY`、`BING_INGEST_TOKEN`（跟 crm-api 的 secret `BING_INGEST_TOKEN` 相同）
-
 ## 周邊機能地點（官網物件頁「周邊機能地圖」）
 - 每月 5 日自動執行（`.github/workflows/poi.yml`，程式 `tools/build_poi.py`），也可在 Actions 手動按「周邊機能地點更新」
 - 地點與座標：OpenStreetMap，經 Overpass API 分 20 塊查詢（每塊間隔 25 秒、失敗有限次重試，並有備用伺服器）
