@@ -19,6 +19,7 @@ import gzip, json, os, re, sys, zlib
 sys.path.insert(0, os.path.dirname(__file__))
 import lvr
 from build_home import BAD, cn_num, roc_to_date, FW
+from addr import clean_addr as addr_clean
 
 ROOT = os.path.join(os.path.dirname(__file__), '..')
 HIST_DIR = os.path.join(ROOT, 'raw', 'hist')
@@ -30,21 +31,17 @@ CN_FLOOR = re.compile(r'([一二三四五六七八九十]+)樓')
 
 
 def clean_addr(addr, names, district):
-    """顯示用門牌：去掉縣市、行政區、里鄰，全形數字改半形，地政造字拿掉"""
-    a = (addr or '').translate(FW).replace('巿', '市')
-    for n in names + [district]:
+    """門牌整理：改用 addr.py 共用的那一份（2026-11-01，跟草屯門牌比對、D1 lvr-db 同一套規則）
+    names（縣市名）留著是為了不改呼叫的地方；縣市、中彰投各鄉鎮 addr.py 都會剝掉"""
+    a = (addr or '')
+    for n in names:
         a = a.replace(n, '')
-    a = re.sub(r'[^\s路街道巷段]{1,4}里\d+鄰', '', a)   # 例如「枇杷里28鄰」
-    a = re.sub(r'\d+鄰', '', a)
-    a = re.sub('[-]', '', a)               # 地政造字（私用區），瀏覽器顯示不出來
-    return a.strip()
+    return addr_clean(a, district)
 
 
 def addr_key(x, names):
-    """比對同一戶用的鍵：門牌（樓層改阿拉伯數字）＋移轉層次"""
+    """比對同一戶用的鍵：整理過的門牌（樓層已是阿拉伯數字、沒有空白）＋移轉層次"""
     a = clean_addr(x['土地位置建物門牌'], names, x['鄉鎮市區'])
-    a = CN_FLOOR.sub(lambda m: f'{cn_num(m.group(1)) or m.group(1)}樓', a)
-    a = re.sub(r'\s+', '', a)
     return a + '|' + re.sub(r'\s+', '', x.get('移轉層次') or '')
 
 
