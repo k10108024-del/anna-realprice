@@ -1,0 +1,42 @@
+# 實價登錄自動更新機器人
+# 每月 2、12、22 日台灣時間上午 10 點執行（內政部每月 1、11、21 日發布最新一批）
+# 也可以到 GitHub 的「Actions」頁面按「Run workflow」手動執行
+name: 實價登錄自動更新
+
+on:
+  schedule:
+    - cron: '0 2 2,12,22 * *'   # UTC 02:00＝台灣 10:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60   # 2026-11-15 全台 22 縣市，本機約 9 分鐘
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: 下載內政部資料並產生行情
+        run: python tools/update.py
+
+      - name: 有變動就存檔（GitHub Pages 會自動發布）
+        # 2026-11-15 全台資料約 475MB，每次都留舊版會讓專案越長越大（GitHub 建議 1GB 內）→ 只留最新一版：
+        # 開一個沒有歷史的新分支放現在全部檔案，強制蓋掉 main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data raw
+          if git diff --cached --quiet; then
+            echo "資料沒有變動"
+          else
+            git checkout --orphan latest
+            git add -A
+            git commit -q -m "自動更新實價登錄 $(date +%F)"
+            git push -f origin latest:main
+          fi

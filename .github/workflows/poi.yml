@@ -1,0 +1,43 @@
+# 周邊機能地點更新機器人（官網物件頁「周邊機能地圖」用）
+# 每月 5 日台灣時間上午 11 點執行；也可以到 Actions 頁面按「Run workflow」手動執行
+# 資料來源：OpenStreetMap（Overpass API）＋教育部各級學校名錄；跑完把 data/poi 存回專案，GitHub Pages 自動發布
+name: 周邊機能地點更新
+
+on:
+  schedule:
+    - cron: '0 3 5 * *'     # UTC 03:00＝台灣 11:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:               # 同一時間只跑一個；推送前會先 pull，跟實價登錄機器人（每月 2/12/22 日）不衝突
+  group: poi
+  cancel-in-progress: false
+
+jobs:
+  poi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: 下載並整理周邊地點
+        run: python tools/build_poi.py
+
+      - name: 有變動就存檔
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data/poi
+          if git diff --cached --quiet; then
+            echo "資料沒有變動"
+          else
+            git commit -m "自動更新周邊機能地點 $(date +%F)"
+            git pull --rebase
+            git push
+          fi

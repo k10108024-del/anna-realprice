@@ -1,0 +1,19 @@
+# -*- coding: utf-8 -*-
+"""
+實價登錄自動更新（GitHub 機器人每月 2、12、22 日執行，也可以手動執行）
+  1. 下載內政部本期（最新一批）資料存起來
+  2. 產生中彰投查詢資料 data/index.js、data/B-01.js…
+  3. 產生首頁速報資料 data/data.js
+用法：python tools/update.py
+"""
+import os, sys
+sys.path.insert(0, os.path.dirname(__file__))
+import lvr, build_regions, build_home
+
+CODES = [c for c, _, _ in build_regions.COUNTIES]   # 2026-11-15 全台 22 縣市
+lvr.save_current_batch(CODES)
+lvr.fill_prev_attach(CODES)   # 上一批如果漏存附表，從「前期下載」補回來
+lvr.prune_current()
+build_regions.main()
+build_home.main()
+print('全部完成')
